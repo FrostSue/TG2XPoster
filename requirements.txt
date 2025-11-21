@@ -1,0 +1,6 @@
+telethon
+tweepy
+python-dotenv
+aiofiles
+pillow
+colorlog

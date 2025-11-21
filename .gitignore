@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+logs/
+*.log
+data/temp/
+data/posted_ids.json
+venv/
+env/
+.venv/
+.vscode/
+.idea/
+.docker/
+.DS_Store
+Thumbs.db
