@@ -5,6 +5,7 @@ from core.logger import setup_logger
 from core.env_loader import Config
 from utils.id_storage import IDStorage
 from twitter.publisher import TwitterPublisher
+from utils.notifier import send_log
 
 logger = setup_logger()
 
@@ -16,17 +17,23 @@ class TelegramListener:
         self.album_queue = {} 
 
     async def start(self):
+        logger.info("Starting Telegram Listener...")
         Config.ensure_dirs()
+        
         await self.client.start(bot_token=Config.TG_BOT_TOKEN)
         
+        
+        send_log("System started successfully and is monitoring the channel.", "START")
+        
         self.client.add_event_handler(
-            self.handle_message,
+            self.handle_new_message,
             events.NewMessage(chats=Config.TG_CHANNEL_ID)
         )
-        logger.info(f"System active. Channel: {Config.TG_CHANNEL_ID}")
+        
+        logger.info(f"System active. Monitoring: {Config.TG_CHANNEL_ID}")
         await self.client.run_until_disconnected()
 
-    async def handle_message(self, event):
+    async def handle_new_message(self, event):
         msg = event.message
         if self.storage.is_posted(msg.id): return
 
@@ -36,49 +43,68 @@ class TelegramListener:
             await self.process_single(msg)
 
     async def process_album(self, message):
-        gid = message.grouped_id
-        if gid in self.album_queue: return
+        grouped_id = message.grouped_id
+        if grouped_id in self.album_queue: return
 
-        self.album_queue[gid] = []
-        await asyncio.sleep(3) 
+        self.album_queue[grouped_id] = []
+        await asyncio.sleep(3)
         
         media_files = []
-        text = ""
-        ids = []
+        text_content = ""
+        message_ids = []
+
         async for m in self.client.iter_messages(Config.TG_CHANNEL_ID, limit=10):
-            if m.grouped_id == gid:
+            if m.grouped_id == grouped_id:
                 if self.storage.is_posted(m.id): continue
-                ids.append(m.id)
-                if m.text and not text: text = m.text
-                path = await self.download(m)
+                message_ids.append(m.id)
+                if m.text and not text_content: text_content = m.text
+                path = await self.download_media(m)
                 if path: media_files.append(path)
 
         media_files.reverse()
         
         if media_files:
-            logger.info(f"Album: {len(media_files)} file")
-            if self.twitter.post_tweet(text, media_files):
-                for i in ids: self.storage.add_id(i)
-            self.cleanup(media_files)
+            logger.info(f"Album detected: {len(media_files)} files.")
+            success = self.twitter.post_tweet(text_content, media_files)
+            if success:
+                for mid in message_ids: self.storage.add_id(mid)
+                send_log(f"📸 Album Posted!\nFiles: {len(media_files)}\nMessage: {text_content[:50]}...", "SUCCESS")
+            else:
+                send_log("Album posting failed!", "ERROR")
+
+            self.cleanup_files(media_files)
         
-        if gid in self.album_queue: del self.album_queue[gid]
+        if grouped_id in self.album_queue: del self.album_queue[grouped_id]
 
     async def process_single(self, message):
-        path = await self.download(message)
-        media = [path] if path else []
+        logger.info(f"New single message: {message.id}")
+        media_path = await self.download_media(message)
+        media_list = [media_path] if media_path else []
         
-        if self.twitter.post_tweet(message.text, media):
+        success = self.twitter.post_tweet(message.text, media_list)
+        if success:
             self.storage.add_id(message.id)
-            self.cleanup(media)
+            msg_preview = message.text[:50] + "..." if message.text else "Media Only"
+            send_log(f"Single Content Posted!\nContent: {msg_preview}", "SUCCESS")
+        else:
+            send_log(f"Single content posting failed! ID: {message.id}", "ERROR")
 
-    async def download(self, message):
+        self.cleanup_files(media_list)
+
+    async def download_media(self, message):
         if message.media:
             try:
                 return await self.client.download_media(message, file=Config.TEMP_DIR)
-            except:
+            except Exception as e:
+                logger.error(f"Download error: {e}")
+                send_log(f"File download failed: {e}", "ERROR")
                 return None
         return None
 
-    def cleanup(self, files):
-        for f in files:
-            if f and os.path.exists(f): os.remove(f)
+    def cleanup_files(self, file_paths):
+        for path in file_paths:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
