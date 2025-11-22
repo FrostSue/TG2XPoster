@@ -15,3 +15,5 @@ env/
 .docker/
 .DS_Store
 Thumbs.db
+*.session
+*.session-journal
