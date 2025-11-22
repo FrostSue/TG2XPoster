@@ -14,6 +14,7 @@ class TelegramListener:
         self.client = TelegramClient('bot_session', Config.TG_API_ID, Config.TG_API_HASH)
         self.twitter = TwitterPublisher(Config)
         self.storage = IDStorage(Config.DATA_FILE)
+        
         self.album_queue = {} 
 
     async def start(self):
@@ -21,7 +22,6 @@ class TelegramListener:
         Config.ensure_dirs()
         
         await self.client.start(bot_token=Config.TG_BOT_TOKEN)
-        
         
         send_log("System started successfully and is monitoring the channel.", "START")
         
@@ -38,33 +38,63 @@ class TelegramListener:
         if self.storage.is_posted(msg.id): return
 
         if msg.grouped_id:
-            await self.process_album(msg)
+            
+            await self.handle_album_chunk(msg)
         else:
+            
             await self.process_single(msg)
 
-    async def process_album(self, message):
-        grouped_id = message.grouped_id
-        if grouped_id in self.album_queue: return
-
-        self.album_queue[grouped_id] = []
-        await asyncio.sleep(3)
+    async def handle_album_chunk(self, message):
+        """
+        Collects album parts as they arrive without querying history.
+        """
+        gid = message.grouped_id
         
+        
+        if gid in self.album_queue:
+            self.album_queue[gid].append(message)
+            return
+
+        
+        self.album_queue[gid] = [message]
+        
+        
+        asyncio.create_task(self.process_album_worker(gid))
+
+    async def process_album_worker(self, grouped_id):
+        """
+        Waits for all parts to arrive, then processes them.
+        """
+        
+        await asyncio.sleep(4)
+
+        
+        messages = self.album_queue.pop(grouped_id, [])
+        if not messages: return
+
+        
+        messages.sort(key=lambda x: x.id)
+
+        
+        messages = [m for m in messages if not self.storage.is_posted(m.id)]
+        if not messages: return
+
+        logger.info(f"Processing album with {len(messages)} items.")
+
         media_files = []
         text_content = ""
         message_ids = []
 
-        async for m in self.client.iter_messages(Config.TG_CHANNEL_ID, limit=10):
-            if m.grouped_id == grouped_id:
-                if self.storage.is_posted(m.id): continue
-                message_ids.append(m.id)
-                if m.text and not text_content: text_content = m.text
-                path = await self.download_media(m)
-                if path: media_files.append(path)
-
-        media_files.reverse()
         
+        for m in messages:
+            message_ids.append(m.id)
+            if m.text and not text_content: 
+                text_content = m.text
+            
+            path = await self.download_media(m)
+            if path: media_files.append(path)
+
         if media_files:
-            logger.info(f"Album detected: {len(media_files)} files.")
             success = self.twitter.post_tweet(text_content, media_files)
             if success:
                 for mid in message_ids: self.storage.add_id(mid)
@@ -73,8 +103,6 @@ class TelegramListener:
                 send_log("Album posting failed!", "ERROR")
 
             self.cleanup_files(media_files)
-        
-        if grouped_id in self.album_queue: del self.album_queue[grouped_id]
 
     async def process_single(self, message):
         logger.info(f"New single message: {message.id}")
