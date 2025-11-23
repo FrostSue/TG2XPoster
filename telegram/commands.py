@@ -8,7 +8,7 @@ from utils.restarter import restart_bot
 async def is_user_admin(client, chat_id, user_id):
     """
     Checks if the user is an administrator in the CURRENT chat (Group).
-    """
+    """ 
     if chat_id == user_id:
         return False
 
@@ -21,8 +21,7 @@ async def is_user_admin(client, chat_id, user_id):
         if isinstance(participant.participant, (types.ChannelParticipantAdmin, types.ChannelParticipantCreator)):
             return True
         return False
-    except Exception as e:
-        
+    except Exception:
         return False
 
 async def handle_command(event, bot_instance):
@@ -31,8 +30,10 @@ async def handle_command(event, bot_instance):
     """
     sender = await event.get_sender()
     if not sender: return
-
-    command = event.message.text.lower().strip().split()[0]
+    if not event.message or not event.message.text: return
+    command_parts = event.message.text.lower().strip().split()
+    if not command_parts: return
+    command = command_parts[0]
     chat_id = event.chat_id
     
     
@@ -63,11 +64,10 @@ async def handle_command(event, bot_instance):
     is_admin = await is_user_admin(bot_instance.client, chat_id, sender.id)
 
     if not is_admin:
-        
         if chat_id == sender.id:
             await event.reply("⛔ **Access Denied:** Admin commands usually work in groups, not in DM.")
         else:
-            await event.reply("⛔ **Access Denied:** You must be an administrator of this group to use this command.")
+            await event.reply("⛔ **Access Denied:** You must be an administrator of this group.")
         return
 
     
