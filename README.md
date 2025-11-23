@@ -12,7 +12,7 @@
 * **🛡️ Duplicate Prevention:** Tracks posted message IDs to prevent re-posting the same content.
 * **🐳 Docker Ready:** Fully containerized for easy deployment and scalability.
 * **🔄 Resilient:** Includes automatic retry logic and rate-limit handling (HTTP 429).
-* **🏗️ Clean Architecture:** Modular codebase separating logic for listener, publisher, and utilities.
+* **📱 Admin Commands:** Control and check bot status directly via Telegram messages.
 
 ---
 
@@ -21,10 +21,10 @@
 ```text
 TG2XPoster/
 ├── core/             # Configuration and Logging modules
-├── telegram/         # Telegram listener and album parser
+├── telegram/         # Telegram listener, album parser & admin commands
 ├── twitter/          # Twitter API v2 & v1.1 handlers
-├── utils/            # Helper functions (formatting, storage)
-├── data/             # Persistent storage (posted_ids.json)
+├── utils/            # Helper functions (formatting, storage, notifier)
+├── data/             # Persistent storage (auth session & posted_ids)
 ├── .env              # API Keys (Not included in repo)
 ├── docker-compose.yml
 ├── Dockerfile
@@ -46,7 +46,7 @@ TG2XPoster/
 ### 1\. Clone the Repository
 
 ```bash
-git clone [https://github.com/FrostSue/TG2XPoster.git](https://github.com/FrostSue/TG2XPoster.git)
+git clone [https://github.com/yourusername/TG2XPoster.git](https://github.com/yourusername/TG2XPoster.git)
 cd TG2XPoster
 ```
 
@@ -59,7 +59,10 @@ Create a `.env` file in the root directory and fill in your credentials:
 TELEGRAM_API_ID=123456
 TELEGRAM_API_HASH=your_api_hash
 TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_CHANNEL_ID=-100xxxxxxxxxx  # Must start with -100
+TELEGRAM_CHANNEL_ID=-100xxxxxxxxxx  
+
+# --- LOGGING & ADMIN ---
+TELEGRAM_LOG_CHANNEL_ID=-100xxxxxxxxxx
 ADMIN_USER_ID=123456789
 
 # --- TWITTER (X) SETTINGS ---
@@ -107,12 +110,25 @@ If you prefer running it directly on your machine:
 
 -----
 
+## 🎮 Admin Commands
+
+You can interact with the bot by sending direct messages (DM) to the bot handle.
+*Note: These commands only work for the user specified in `ADMIN_USER_ID`.*
+
+| Command | Description |
+| :--- | :--- |
+| **/status** | Displays system uptime, total tweets sent, and active monitoring status. |
+| **/logs** | Fetches and displays the last 15 lines of the system log file directly in chat. |
+| **/ping** | Simple health check. Returns "Pong\!" if the bot is active. |
+
+-----
+
 ## ⚠️ Important Notes
 
 1.  **Telegram Permissions:** The bot must be an **Administrator** in the source Telegram channel to read messages effectively.
 2.  **Twitter Permissions:** Ensure your Twitter App has **"Read and Write"** permissions enabled in the Developer Portal.
       * *Note: If you change permissions from Read-Only to Read/Write, you must regenerate your Access Token & Secret.*
-3.  **Video Uploads:** Twitter API requires `chunked upload` for videos, which is handled automatically by this bot.
+3.  **Session Management:** The bot uses a persistent session file stored in the `data/` directory to avoid re-login issues (Bad Salt errors) and ensure stability across restarts.
 
 -----
 
