@@ -1,6 +1,5 @@
 import asyncio
 import os
-import datetime
 import time
 from telethon import TelegramClient, events
 from telethon.network import connection
@@ -10,12 +9,12 @@ from utils.id_storage import IDStorage
 from twitter.publisher import TwitterPublisher
 from utils.notifier import send_log
 
+from .commands import handle_command
+
 logger = setup_logger()
 
 class TelegramListener:
     def __init__(self):
-        
-        
         
         session_path = 'internal_bot_session'
         
@@ -37,7 +36,6 @@ class TelegramListener:
         logger.info("Starting Telegram Listener...")
         Config.ensure_dirs()
         
-        
         await self.client.start(bot_token=Config.TG_BOT_TOKEN)
         
         send_log("System started successfully.", "START")
@@ -50,58 +48,19 @@ class TelegramListener:
 
         
         
-        if Config.ADMIN_ID:
-            self.client.add_event_handler(
-                self.handle_admin_command,
-                events.NewMessage(from_users=[Config.ADMIN_ID])
-            )
-            logger.info(f"Admin commands enabled for ID: {Config.ADMIN_ID}")
+        self.client.add_event_handler(
+            self.route_command,
+            events.NewMessage(pattern='/')
+        )
         
         logger.info(f"System active. Monitoring: {Config.TG_CHANNEL_ID}")
         await self.client.run_until_disconnected()
 
     
-    async def handle_admin_command(self, event):
-        message = event.message.text.lower().strip()
-
+    async def route_command(self, event):
         
-        if message == '/ping':
-            await event.reply("🏓 **Pong!** I am alive and listening.")
-
         
-        elif message == '/status':
-            uptime_seconds = int(time.time() - self.start_time)
-            uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
-            
-            status_msg = (
-                f"📊 **BOT STATUS REPORT**\n\n"
-                f"✅ **State:** Running\n"
-                f"⏱ **Uptime:** `{uptime_str}`\n"
-                f"🐦 **Tweets Sent:** `{self.total_tweets}`\n"
-                f"📡 **Monitoring:** `{Config.TG_CHANNEL_ID}`"
-            )
-            await event.reply(status_msg)
-
-        
-        elif message == '/logs':
-            try:
-                log_file = 'logs/app.log'
-                if os.path.exists(log_file):
-                    
-                    with open(log_file, 'r', encoding='utf-8') as f:
-                        lines = f.readlines()
-                        last_logs = "".join(lines[-15:])
-                    
-                    if not last_logs: last_logs = "No logs yet."
-                    
-                    
-                    if len(last_logs) > 4000: last_logs = last_logs[-4000:]
-                    
-                    await event.reply(f"📋 **RECENT LOGS**\n\n```text\n{last_logs}\n```")
-                else:
-                    await event.reply("⚠️ Log file not found.")
-            except Exception as e:
-                await event.reply(f"❌ Error reading logs: {e}")
+        await handle_command(event, self)
 
     
     async def handle_new_message(self, event):
@@ -144,7 +103,7 @@ class TelegramListener:
         if media_files:
             success = self.twitter.post_tweet(text_content, media_files)
             if success:
-                self.total_tweets += 1  
+                self.total_tweets += 1
                 for mid in message_ids: self.storage.add_id(mid)
                 send_log(f"Album Posted! Files: {len(media_files)}", "SUCCESS")
             else:
@@ -158,7 +117,7 @@ class TelegramListener:
         
         success = self.twitter.post_tweet(message.text, media_list)
         if success:
-            self.total_tweets += 1  
+            self.total_tweets += 1
             self.storage.add_id(message.id)
             send_log("Single Content Posted!", "SUCCESS")
         else:
@@ -171,7 +130,6 @@ class TelegramListener:
                 return await self.client.download_media(message, file=Config.TEMP_DIR)
             except Exception as e:
                 logger.error(f"Download error: {e}")
-                send_log(f"File download failed: {e}", "ERROR")
                 return None
         return None
 
