@@ -1,78 +1,77 @@
 import os
 import time
 import datetime
-from telethon import events, functions, types
+from telethon import events
 from core.env_loader import Config
 from utils.restarter import restart_bot
+from utils.auth_manager import AuthManager
 
-async def is_user_admin(client, chat_id, user_id):
-    """
-    Checks if the user is an administrator in the CURRENT chat (Group).
-    """ 
-    if chat_id == user_id:
-        return False
 
-    try:
-        participant = await client(functions.channels.GetParticipantRequest(
-            channel=chat_id,
-            participant=user_id
-        ))
-        
-        if isinstance(participant.participant, (types.ChannelParticipantAdmin, types.ChannelParticipantCreator)):
-            return True
-        return False
-    except Exception:
-        return False
+auth = AuthManager()
 
 async def handle_command(event, bot_instance):
     """
-    Central command handler.
+    Owner & Sudo Logic.
     """
     sender = await event.get_sender()
     if not sender: return
+
     if not event.message or not event.message.text: return
-    command_parts = event.message.text.lower().strip().split()
+    
+    raw_text = event.message.text.strip()
+    command_parts = raw_text.split()
     if not command_parts: return
-    command = command_parts[0]
-    chat_id = event.chat_id
+    
+    
+    command = command_parts[0].lower().split('@')[0]
+    args = command_parts[1:] 
+    
+    
+    user_id = sender.id
+    is_owner = auth.is_owner(user_id)
+    is_sudo = auth.is_authorized(user_id) 
+
     
     
     if command == '/start':
-        intro_msg = (
-            "🤖 **Hello! I am TG2XPoster.**\n\n"
-            "I automatically mirror content from Telegram to X (Twitter).\n"
-            "Add me to a management group to control me.\n\n"
-            "ℹ️ Type `/help` to see available commands."
+        await event.reply(
+            "🤖 **TG2XPoster Active**\n"
+            "I am running privately. Unauthorized access is restricted."
         )
-        await event.reply(intro_msg)
         return
 
     if command == '/help':
-        help_msg = (
-            "🛠 **AVAILABLE COMMANDS**\n"
-            "*(Only for Group Admins)*\n\n"
-            "🟢 `/status` - View uptime and tweet stats\n"
-            "🏓 `/ping` - Check if bot is alive\n"
-            "📋 `/logs` - View recent system logs\n"
-            "🔄 `/restart` - Restart the bot process\n\n"
-            "⚠️ *Note: Commands must be sent in a group where you are an admin.*"
-        )
-        await event.reply(help_msg)
+        if is_sudo:
+            msg = (
+                "🛠 **ADMIN COMMANDS**\n\n"
+                "📊 `/status` - System stats\n"
+                "🏓 `/ping` - Health check\n"
+                "📋 `/logs` - View logs\n"
+                "🔄 `/restart` - Reboot system\n"
+            )
+            if is_owner:
+                msg += (
+                    "\n👑 **OWNER COMMANDS**\n"
+                    "➕ `/addsudo <ID>` - Add admin\n"
+                    "➖ `/rmsudo <ID>` - Remove admin\n"
+                    "📜 `/sudolist` - List admins"
+                )
+            await event.reply(msg)
+        else:
+            await event.reply("⛔ Access Denied.")
         return
 
     
-    is_admin = await is_user_admin(bot_instance.client, chat_id, sender.id)
+    
+    if command in ['/status', '/ping', '/logs', '/restart', '/addsudo', '/rmsudo', '/sudolist']:
+        if not is_sudo:
+            await event.reply("⛔ **Access Denied:** You are not authorized to manage this bot.")
+            return
 
-    if not is_admin:
-        if chat_id == sender.id:
-            await event.reply("⛔ **Access Denied:** Admin commands usually work in groups, not in DM.")
-        else:
-            await event.reply("⛔ **Access Denied:** You must be an administrator of this group.")
-        return
-
+    
     
     if command == '/ping':
-        await event.reply("🏓 **Pong!** System is active.")
+        await event.reply("🏓 **Pong!** System is operational.")
 
     elif command == '/status':
         uptime_seconds = int(time.time() - bot_instance.start_time)
@@ -80,10 +79,10 @@ async def handle_command(event, bot_instance):
         
         status_msg = (
             f"📊 **SYSTEM STATUS**\n\n"
+            f"🛡 **User Role:** {'👑 Owner' if is_owner else '👮 Sudo'}\n"
             f"✅ **State:** Online\n"
             f"⏱ **Uptime:** `{uptime_str}`\n"
-            f"🐦 **Total Tweets:** `{bot_instance.total_tweets}`\n"
-            f"📡 **Monitored Channel:** `{Config.TG_CHANNEL_ID}`"
+            f"🐦 **Tweets:** `{bot_instance.total_tweets}`"
         )
         await event.reply(status_msg)
 
@@ -94,14 +93,54 @@ async def handle_command(event, bot_instance):
                 with open(log_file, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
                     last_logs = "".join(lines[-15:]) 
-                
                 if len(last_logs) > 4000: last_logs = last_logs[-4000:]
-                await event.reply(f"📋 **SYSTEM LOGS**\n\n```text\n{last_logs}\n```")
+                await event.reply(f"📋 **LOGS**\n\n```text\n{last_logs}\n```")
             else:
-                await event.reply("⚠️ Log file is empty or missing.")
+                await event.reply("⚠️ No logs found.")
         except Exception as e:
-            await event.reply(f"❌ Error fetching logs: {e}")
+            await event.reply(f"❌ Error: {e}")
 
     elif command == '/restart':
-        await event.reply("🔄 **Rebooting system...**\nBot will be back in ~10 seconds.")
+        await event.reply("🔄 **Rebooting...**")
         restart_bot()
+
+    
+    
+    elif command == '/addsudo':
+        if not is_owner:
+            await event.reply("⛔ Only the **Owner** can add new admins.")
+            return
+        
+        if not args or not args[0].isdigit():
+            await event.reply("❌ Usage: `/addsudo 123456789`")
+            return
+            
+        new_id = int(args[0])
+        if auth.add_sudo(new_id):
+            await event.reply(f"✅ User `{new_id}` added to Sudo list.")
+        else:
+            await event.reply("⚠️ User is already authorized or invalid.")
+
+    elif command == '/rmsudo':
+        if not is_owner:
+            await event.reply("⛔ Only the **Owner** can remove admins.")
+            return
+
+        if not args or not args[0].isdigit():
+            await event.reply("❌ Usage: `/rmsudo 123456789`")
+            return
+
+        target_id = int(args[0])
+        if auth.remove_sudo(target_id):
+            await event.reply(f"🗑 User `{target_id}` removed from Sudo list.")
+        else:
+            await event.reply("⚠️ User not found in Sudo list.")
+
+    elif command == '/sudolist':
+        if not is_owner: return
+        sudoers = auth.get_sudo_list()
+        if not sudoers:
+            await event.reply("📜 **Sudo List:** Empty (Only Owner).")
+        else:
+            msg = "📜 **Sudo Users:**\n" + "\n".join([f"- `{uid}`" for uid in sudoers])
+            await event.reply(msg)
