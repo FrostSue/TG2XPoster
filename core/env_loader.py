@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 from .exceptions import ConfigurationError
+
 load_dotenv()
 
 class Config:
@@ -9,7 +10,8 @@ class Config:
         TG_API_HASH = os.getenv("TELEGRAM_API_HASH")
         TG_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
         TG_CHANNEL_ID = int(os.getenv("TELEGRAM_CHANNEL_ID"))
-        LOG_CHANNEL_ID = int(os.getenv("TELEGRAM_LOG_CHANNEL_ID"))
+        LOG_CHANNEL_ID = int(os.getenv("TELEGRAM_LOG_CHANNEL_ID")) if os.getenv("TELEGRAM_LOG_CHANNEL_ID") else None        
+        ADMIN_ID = int(os.getenv("ADMIN_USER_ID")) if os.getenv("ADMIN_USER_ID") else None
 
         TW_API_KEY = os.getenv("TWITTER_API_KEY")
         TW_API_SECRET = os.getenv("TWITTER_API_SECRET")
@@ -18,7 +20,7 @@ class Config:
         TW_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 
     except (TypeError, ValueError):
-        raise ConfigurationError("Missing or incorrect .env configuration!")
+        raise ConfigurationError("Missing or invalid .env configuration!")
 
     TEMP_DIR = "data/temp"
     DATA_FILE = "data/posted_ids.json"

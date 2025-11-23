@@ -60,6 +60,7 @@ TELEGRAM_API_ID=123456
 TELEGRAM_API_HASH=your_api_hash
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHANNEL_ID=-100xxxxxxxxxx  # Must start with -100
+ADMIN_USER_ID=123456789
 
 # --- TWITTER (X) SETTINGS ---
 TWITTER_API_KEY=your_consumer_key
@@ -122,6 +123,3 @@ Contributions, issues, and feature requests are welcome\! Feel free to check the
 ## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-```
-```
