@@ -7,6 +7,7 @@ logs/
 *.log
 data/temp/
 data/posted_ids.json
+data/sudoers.json
 venv/
 env/
 .venv/
