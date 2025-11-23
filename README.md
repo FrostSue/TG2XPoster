@@ -2,7 +2,9 @@
 
 **TG2XPoster** is a professional, modular, and scalable automation tool designed to monitor a specific Telegram channel in real-time and mirror its content to a Twitter (X) account. It handles text, single photos, videos, and complex albums (grouped media) with zero latency using the Telegram Event API.
 
------
+It features a robust **Role-Based Access Control (RBAC)** system, allowing secure management through **"Owner"** and **"Sudo"** roles directly from Telegram.
+
+---
 
 ## 🚀 Key Features
 
@@ -10,24 +12,27 @@
 * **📸 Smart Media Handling:** Supports Photos, Videos, and **Albums (Grouped Media)**.
 * **🧵 Auto-Threading:** Automatically splits long texts (>280 chars) into a Twitter thread without breaking words.
 * **🛡️ Duplicate Prevention:** Tracks posted message IDs to prevent re-posting the same content.
+* **🔐 Secure Access Control:** Features an **Owner & Sudo** system. Only authorized users can control the bot.
 * **🐳 Docker Ready:** Fully containerized for easy deployment and scalability.
-* **🔄 Resilient:** Includes automatic retry logic and rate-limit handling (HTTP 429).
-* **👥 Group Admin Control:** Manage the bot from any Telegram group by adding it as an admin.
+* **🔄 Resilient:** Includes automatic retry logic, rate-limit handling (HTTP 429), and auto-restart capabilities.
 * **🛠️ Advanced Commands:** Check logs, status, or restart the system directly from Telegram.
 
------
+---
 
 ## 📂 Project Structure
 
 ```text
 TG2XPoster/
 ├── core/             # Configuration and Logging modules
-├── telegram/         # Listener, command router & permission checks
-│   ├── listener.py
-│   └── commands.py   # Command logic (/start, /help, /status, etc.)
-├── twitter/          # Twitter API v2 & v1.1 handlers
-├── utils/            # Helper functions (formatting, storage, notifier, restarter)
-├── data/             # Persistent storage (auth session & posted_ids)
+├── telegram/         # Telegram logic
+│   ├── listener.py   # Main event loop
+│   └── commands.py   # Command handler & permission logic
+├── twitter/          # Twitter API handlers
+├── utils/            # Helper functions
+│   ├── auth_manager.py # Owner/Sudo permission manager
+│   ├── restarter.py    # System restart logic
+│   └── notifier.py     # Telegram log notifier
+├── data/             # Persistent storage (session, posted_ids, sudoers)
 ├── .env              # API Keys (Not included in repo)
 ├── docker-compose.yml
 ├── Dockerfile
@@ -49,13 +54,14 @@ TG2XPoster/
 ### 1\. Clone the Repository
 
 ```bash
-git clone [https://github.com/FrostSue/TG2XPoster.git](https://github.com/FrostSue/TG2XPoster.git)
+git clone https://github.com/FrostSue/TG2XPoster.git
 cd TG2XPoster
 ```
 
 ### 2\. Configuration (.env)
 
-Create a `.env` file in the root directory and fill in your credentials:
+Create a `.env` file in the root directory and fill in your credentials.
+**CRITICAL:** Set your own Telegram ID as `ADMIN_USER_ID` to become the **Owner**.
 
 ```ini
 # --- TELEGRAM SETTINGS ---
@@ -64,8 +70,10 @@ TELEGRAM_API_HASH=your_api_hash
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHANNEL_ID=-100xxxxxxxxxx  # Channel to monitor
 
-# --- LOGGING ---
-TELEGRAM_LOG_CHANNEL_ID=-100xxxxxxxxxx 
+# --- SECURITY & LOGGING ---
+TELEGRAM_LOG_CHANNEL_ID=-100xxxxxxxxxx # Channel for system logs
+ADMIN_USER_ID=123456789  # <--- YOUR TELEGRAM ID (THE OWNER)
+
 # --- TWITTER (X) SETTINGS ---
 TWITTER_API_KEY=your_consumer_key
 TWITTER_API_SECRET=your_consumer_secret
@@ -111,18 +119,29 @@ If you prefer running it directly on your machine:
 
 -----
 
-## 🎮 Bot Commands
+## 👑 Roles & Commands
 
-To control the bot, **add the bot to a Telegram group** and promote it to an administrator. Any administrator in that group can then use these commands.
+The bot uses a strict permission system to prevent unauthorized access. Commands can be sent via Direct Message (DM) or in a group where the bot is present.
+
+### 1\. Roles
+
+  * **Owner:** Defined in `.env` (`ADMIN_USER_ID`). Has full access, including adding/removing admins.
+  * **Sudo (Admin):** Added by the Owner. Can manage the bot (view logs, restart) but cannot add new admins.
+  * **Public:** Can only view basic info (`/start`, `/help`).
+
+### 2\. Command List
 
 | Command | Description | Permission |
 | :--- | :--- | :--- |
-| **/start** | Displays introduction and basic info about the bot. | Public |
-| **/help** | Shows the list of available commands. | Public |
-| **/status** | Displays system uptime, total tweets sent, and monitoring details. | **Admin Only** |
-| **/logs** | Fetches and displays the last 15 lines of the system log file. | **Admin Only** |
-| **/ping** | Simple health check. Returns "Pong\!" if the bot is active. | **Admin Only** |
-| **/restart** | Restarts the bot process (Docker will auto-reload it). | **Admin Only** |
+| **/start** | Bot introduction. | Public |
+| **/help** | Shows available commands based on your role. | Public |
+| **/status** | Displays uptime, tweet stats, and user role. | **Sudo + Owner** |
+| **/ping** | Health check. Returns "Pong\!" if the bot is active. | **Sudo + Owner** |
+| **/logs** | Fetches the last 15 lines of system logs. | **Sudo + Owner** |
+| **/restart** | Reboots the bot process (Docker auto-restarts it). | **Sudo + Owner** |
+| **/addsudo `<ID>`** | Grants admin privileges to a user ID. | **Owner Only** |
+| **/rmsudo `<ID>`** | Revokes admin privileges from a user ID. | **Owner Only** |
+| **/sudolist** | Lists all authorized Sudo admins. | **Owner Only** |
 
 -----
 
@@ -131,8 +150,8 @@ To control the bot, **add the bot to a Telegram group** and promote it to an adm
 1.  **Telegram Permissions:** The bot must be an **Administrator** in the source Telegram channel to read messages effectively.
 2.  **Twitter Permissions:** Ensure your Twitter App has **"Read and Write"** permissions enabled in the Developer Portal.
       * *Note: If you change permissions from Read-Only to Read/Write, you must regenerate your Access Token & Secret.*
-3.  **Session Management:** The bot uses a persistent session file stored in the `data/` directory to avoid re-login issues (Bad Salt errors) and ensure stability across restarts.
-4.  **Group Management:** Commands are designed to work in groups. Private messages (DM) may not support admin privilege checks correctly.
+3.  **Session Management:** The bot uses a persistent session file stored internally (in Docker) or in the `data/` directory to avoid re-login issues (Bad Salt errors) and ensure stability across restarts.
+4.  **Security:** The `data/sudoers.json` file stores the list of authorized IDs locally. This file is persistent but excluded from Git to protect privacy.
 
 -----
 
