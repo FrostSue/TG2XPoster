@@ -7,28 +7,33 @@ logger = setup_logger()
 class IDStorage:
     def __init__(self, filepath):
         self.filepath = filepath
-        self.posted_ids = self._load_ids()
+        self.posted_data = self._load_data()
 
-    def _load_ids(self):
+    def _load_data(self):
         if not os.path.exists(self.filepath):
-            return []
+            return {}
         try:
             with open(self.filepath, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, list): return {}
+                return data
         except json.JSONDecodeError:
-            return []
+            return {}
 
-    def is_posted(self, message_id):
-        return message_id in self.posted_ids
+    def get_tweet_id(self, tg_message_id):
+        """Retrieves the Twitter ID associated with a Telegram Message ID."""
+        return self.posted_data.get(str(tg_message_id))
 
-    def add_id(self, message_id):
-        if message_id not in self.posted_ids:
-            self.posted_ids.append(message_id)
-            self._save_ids()
+    def is_posted(self, tg_message_id):
+        return str(tg_message_id) in self.posted_data
 
-    def _save_ids(self):
+    def add_id(self, tg_message_id, twitter_tweet_id):
+        self.posted_data[str(tg_message_id)] = str(twitter_tweet_id)
+        self._save_data()
+
+    def _save_data(self):
         try:
             with open(self.filepath, 'w', encoding='utf-8') as f:
-                json.dump(self.posted_ids, f)
+                json.dump(self.posted_data, f)
         except Exception as e:
-            logger.error(f"ID registration error: {e}")
+            logger.error(f"Failed to save ID data: {e}")
