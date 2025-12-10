@@ -31,6 +31,14 @@ class IDStorage:
         self.posted_data[str(tg_message_id)] = str(twitter_tweet_id)
         self._save_data()
 
+    def delete_id(self, tg_message_id):
+        """Removes an ID from the database."""
+        if str(tg_message_id) in self.posted_data:
+            del self.posted_data[str(tg_message_id)]
+            self._save_data()
+            return True
+        return False
+
     def _save_data(self):
         try:
             with open(self.filepath, 'w', encoding='utf-8') as f:

@@ -44,6 +44,11 @@ class TelegramListener:
         )
 
         self.client.add_event_handler(
+            self.handle_deletion,
+            events.MessageDeleted(chats=Config.TG_CHANNEL_ID)
+        )
+
+        self.client.add_event_handler(
             self.route_command,
             events.NewMessage(pattern='/')
         )
@@ -62,16 +67,32 @@ class TelegramListener:
         else:
             await self.process_single(msg)
 
+    async def handle_deletion(self, event):
+        """
+        Handles message deletions on Telegram and syncs to Twitter.
+        """
+        for msg_id in event.deleted_ids:
+            tweet_id = self.storage.get_tweet_id(msg_id)
+            if tweet_id:
+                logger.info(f"Deletion detected for Msg {msg_id}. Deleting Tweet {tweet_id}...")
+                if self.twitter.delete_tweet(tweet_id):
+                    self.storage.delete_id(msg_id)
+                    send_log(f"🗑 **DELETION SYNCED!**\nTelegram Msg: `{msg_id}`\nTwitter ID: `{tweet_id}` removed.", "SUCCESS")
+                else:
+                    send_log(f"⚠️ Could not delete tweet for Msg {msg_id}", "WARNING")
+
     async def handle_message_edit(self, event):
         """
-        Handles edited messages: Deletes old tweet, posts new one.
+        Handles edited messages with a safety delay to prevent race conditions.
         """
         msg = event.message
         if not msg: return
 
+        await asyncio.sleep(2)
+
         old_tweet_id = self.storage.get_tweet_id(msg.id)
         if not old_tweet_id:
-            logger.info(f"Edit ignored: Message {msg.id} not in DB.")
+            logger.warning(f"Edit ignored: Message {msg.id} not found in DB (or not posted yet).")
             return
 
         logger.info(f"Edit detected for Msg {msg.id}. Syncing...")
@@ -79,7 +100,7 @@ class TelegramListener:
         if self.twitter.delete_tweet(old_tweet_id):
             logger.info(f"Old tweet {old_tweet_id} deleted.")
         else:
-            send_log(f"⚠️ Edit sync warning: Could not delete old tweet {old_tweet_id}", "WARNING")
+            logger.warning(f"Could not delete old tweet {old_tweet_id}")
 
         text_content = msg.raw_text
         media_path = await self.download_media(msg)
@@ -99,7 +120,7 @@ class TelegramListener:
             self.storage.add_id(msg.id, new_tweet_id)
             send_log(f"🔄 **EDIT SYNCED!**\nOld ID: `{old_tweet_id}`\nNew ID: `{new_tweet_id}`", "SUCCESS")
         else:
-            send_log(f"❌ Edit sync failed for Msg {msg.id}", "ERROR")
+            send_log(f"❌ Edit sync failed for Msg {msg.id}. Could not repost.", "ERROR")
 
     async def handle_album_chunk(self, message):
         gid = message.grouped_id
@@ -131,7 +152,7 @@ class TelegramListener:
 
         for m in messages:
             message_ids.append(m.id)
-            if m.raw_text and not text_content:
+            if m.raw_text and not text_content: 
                 text_content = m.raw_text
             path = await self.download_media(m)
             if path: media_files.append(path)
