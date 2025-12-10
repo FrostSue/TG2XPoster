@@ -32,9 +32,15 @@ class TelegramListener:
         Config.ensure_dirs()
         await self.client.start(bot_token=Config.TG_BOT_TOKEN)
         send_log("System started successfully.", "START")
+        
         self.client.add_event_handler(
             self.handle_new_message,
             events.NewMessage(chats=Config.TG_CHANNEL_ID)
+        )
+
+        self.client.add_event_handler(
+            self.handle_message_edit,
+            events.MessageEdited(chats=Config.TG_CHANNEL_ID)
         )
 
         self.client.add_event_handler(
@@ -55,6 +61,45 @@ class TelegramListener:
             await self.handle_album_chunk(msg)
         else:
             await self.process_single(msg)
+
+    async def handle_message_edit(self, event):
+        """
+        Handles edited messages: Deletes old tweet, posts new one.
+        """
+        msg = event.message
+        if not msg: return
+
+        old_tweet_id = self.storage.get_tweet_id(msg.id)
+        if not old_tweet_id:
+            logger.info(f"Edit ignored: Message {msg.id} not in DB.")
+            return
+
+        logger.info(f"Edit detected for Msg {msg.id}. Syncing...")
+
+        if self.twitter.delete_tweet(old_tweet_id):
+            logger.info(f"Old tweet {old_tweet_id} deleted.")
+        else:
+            send_log(f"⚠️ Edit sync warning: Could not delete old tweet {old_tweet_id}", "WARNING")
+
+        text_content = msg.raw_text
+        media_path = await self.download_media(msg)
+        media_list = [media_path] if media_path else []
+        
+        quote_id = None
+        if msg.is_reply:
+            reply = await msg.get_reply_message()
+            if reply:
+                quote_id = self.storage.get_tweet_id(reply.id)
+
+        new_tweet_id = self.twitter.post_tweet(text_content, media_list, quote_id=quote_id)
+        
+        self.cleanup_files(media_list)
+
+        if new_tweet_id:
+            self.storage.add_id(msg.id, new_tweet_id)
+            send_log(f"🔄 **EDIT SYNCED!**\nOld ID: `{old_tweet_id}`\nNew ID: `{new_tweet_id}`", "SUCCESS")
+        else:
+            send_log(f"❌ Edit sync failed for Msg {msg.id}", "ERROR")
 
     async def handle_album_chunk(self, message):
         gid = message.grouped_id
@@ -86,7 +131,7 @@ class TelegramListener:
 
         for m in messages:
             message_ids.append(m.id)
-            if m.raw_text and not text_content: 
+            if m.raw_text and not text_content:
                 text_content = m.raw_text
             path = await self.download_media(m)
             if path: media_files.append(path)
