@@ -65,3 +65,15 @@ class TwitterPublisher:
         except Exception as e:
             logger.error(f"Twitter API Error: {e}")
             return None
+
+    def delete_tweet(self, tweet_id):
+        """
+        Deletes a tweet by ID using API v2.
+        """
+        try:
+            self.client.delete_tweet(tweet_id)
+            logger.info(f"Tweet deleted successfully: {tweet_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete tweet {tweet_id}: {e}")
+            return False
