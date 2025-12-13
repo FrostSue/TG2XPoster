@@ -26,7 +26,8 @@ class TelegramListener:
         self.album_queue = {}
         self.pending_posts = {} 
         self.pending_edits = {}
-        self.edit_tasks = {} 
+        self.edit_tasks = {}
+        self.album_groups = {} 
         self.recent_posts = {}
         self.start_time = time.time()
         self.total_tweets = 0
@@ -176,11 +177,21 @@ class TelegramListener:
             logger.info(f"Processing edit for Msg {msg.id}")
 
             if grouped_id:
-                msgs = await self.client.get_messages(Config.TG_CHANNEL_ID, min_id=msg.id-9, max_id=msg.id+9)
-                album_msgs = [m for m in msgs if m and m.grouped_id == grouped_id]
+                album_msgs = []
+                
+                if msg.id in self.album_groups:
+                    group_ids = self.album_groups[msg.id]
+                    album_msgs = await self.client.get_messages(Config.TG_CHANNEL_ID, ids=group_ids)
+                    album_msgs = [m for m in album_msgs if m]
+                else:
+                    potential_ids = list(range(msg.id - 9, msg.id + 10))
+                    msgs = await self.client.get_messages(Config.TG_CHANNEL_ID, ids=potential_ids)
+                    album_msgs = [m for m in msgs if m and m.grouped_id == grouped_id]
+
                 album_msgs.sort(key=lambda x: x.id)
                 
                 if not album_msgs: 
+                    logger.warning("Album edit detected but no siblings found.")
                     return
                 
                 first_msg = album_msgs[0]
@@ -242,6 +253,10 @@ class TelegramListener:
 
         first_msg = messages[0]
         msg_ids = [m.id for m in messages]
+        
+        for mid in msg_ids:
+            self.album_groups[mid] = msg_ids
+
         self.pending_posts[first_msg.id] = msg_ids
         
         text_preview = first_msg.raw_text[:100] + "..." if first_msg.raw_text else "No Text"
@@ -289,6 +304,7 @@ class TelegramListener:
             post_time = time.time()
             for mid in message_ids: 
                 self.storage.add_id(mid, success_id)
+                self.album_groups[mid] = [x.id for x in messages]
             
             tweet_link = f"https://x.com/i/status/{success_id}"
             action_text = "EDIT SYNCED" if old_tweet_id else "ALBUM POSTED"
