@@ -24,7 +24,8 @@ class TelegramListener:
         self.twitter = TwitterPublisher(Config)
         self.storage = IDStorage(Config.DATA_FILE)
         self.album_queue = {}
-        self.pending_albums = {} 
+        self.pending_posts = {} 
+        self.pending_edits = {}
         self.recent_posts = {}
         self.start_time = time.time()
         self.total_tweets = 0
@@ -70,42 +71,69 @@ class TelegramListener:
         data = event.data.decode('utf-8')
         user_id = event.sender_id
         
-        logger.info(f"Callback received: {data} from {user_id}")
-
         parts = data.split('_')
         action = parts[0]
-        type_ = parts[1]
-        msg_id = int(parts[2])
+        category = parts[1] 
+        type_ = parts[2] 
+        try:
+            msg_id = int(parts[3])
+        except IndexError:
+            msg_id = 0
 
         if action == "cancel":
-            await event.edit("❌ **Submission Cancelled.**")
-            if msg_id in self.pending_albums:
-                del self.pending_albums[msg_id]
+            await event.edit("❌ **Operation Cancelled.**")
+            if category == "post":
+                if msg_id in self.pending_posts: del self.pending_posts[msg_id]
+            elif category == "edit":
+                if msg_id in self.pending_edits: del self.pending_edits[msg_id]
             return
 
         if action == "approve":
-            await event.edit("⏳ **Posting to X (Twitter)...**")
+            await event.edit("⏳ **Processing...**")
             
-            if type_ == "single":
-                message = await self.client.get_messages(Config.TG_CHANNEL_ID, ids=msg_id)
-                if message:
-                    await self.execute_single_post(message, event)
-                else:
-                    await event.edit("⚠️ Message not found (might be deleted).")
+            if category == "post":
+                if type_ == "single":
+                    message = await self.client.get_messages(Config.TG_CHANNEL_ID, ids=msg_id)
+                    if message:
+                        await self.execute_single_post(message, event)
+                    else:
+                        await event.edit("⚠️ Message not found.")
 
-            elif type_ == "album":
-                if msg_id not in self.pending_albums:
-                    await event.edit("⚠️ Album data timed out.")
+                elif type_ == "album":
+                    if msg_id not in self.pending_posts:
+                        await event.edit("⚠️ Album data timed out.")
+                        return
+                    album_ids = self.pending_posts.pop(msg_id)
+                    messages = await self.client.get_messages(Config.TG_CHANNEL_ID, ids=album_ids)
+                    messages = [m for m in messages if m]
+                    if messages:
+                        await self.execute_album_post(messages, event)
+                    else:
+                        await event.edit("⚠️ Album messages not found.")
+
+            elif category == "edit":
+                if msg_id not in self.pending_edits:
+                    await event.edit("⚠️ Edit data timed out.")
                     return
                 
-                album_ids = self.pending_albums.pop(msg_id)
-                messages = await self.client.get_messages(Config.TG_CHANNEL_ID, ids=album_ids)
-                messages = [m for m in messages if m] 
-                
-                if messages:
-                    await self.execute_album_post(messages, event)
-                else:
-                    await event.edit("⚠️ Album messages not found.")
+                edit_data = self.pending_edits.pop(msg_id)
+                old_tweet_id = edit_data['old_tweet_id']
+
+                if type_ == "single":
+                    message = await self.client.get_messages(Config.TG_CHANNEL_ID, ids=msg_id)
+                    if message:
+                        await self.execute_single_post(message, event, old_tweet_id=old_tweet_id)
+                    else:
+                        await event.edit("⚠️ Message not found.")
+
+                elif type_ == "album":
+                    album_ids = edit_data['ids']
+                    messages = await self.client.get_messages(Config.TG_CHANNEL_ID, ids=album_ids)
+                    messages = [m for m in messages if m]
+                    if messages:
+                        await self.execute_album_post(messages, event, old_tweet_id=old_tweet_id)
+                    else:
+                        await event.edit("⚠️ Album messages not found.")
 
     async def handle_new_message(self, event):
         msg = event.message
@@ -114,13 +142,12 @@ class TelegramListener:
         if msg.grouped_id:
             await self.handle_album_chunk(msg)
         else:
-            await self.process_single_request(msg)
+            await self.process_single_request(msg, is_edit=False)
 
     async def handle_deletion(self, event):
         for msg_id in event.deleted_ids:
             tweet_id = self.storage.get_tweet_id(msg_id)
             if tweet_id:
-                logger.info(f"Deletion detected for Msg {msg_id}. Deleting Tweet {tweet_id}...")
                 if self.twitter.delete_tweet(tweet_id):
                     self.storage.delete_id(msg_id)
                     send_log(f"🗑 **DELETED**\n\nTelegram: `{msg_id}`\nTwitter: `{tweet_id}` removed.", "SUCCESS")
@@ -131,7 +158,6 @@ class TelegramListener:
 
         if msg.id in self.recent_posts:
             if time.time() - self.recent_posts[msg.id] < 10:
-                logger.info(f"Ghost edit ignored for Msg {msg.id} (Cooldown active)")
                 return
 
         await asyncio.sleep(2)
@@ -140,30 +166,44 @@ class TelegramListener:
         if not old_tweet_id:
             return
 
-        logger.info(f"Edit detected for Msg {msg.id}. Syncing...")
+        if msg.grouped_id:
+            msgs = await self.client.get_messages(Config.TG_CHANNEL_ID, min_id=msg.id-9, max_id=msg.id+9)
+            album_msgs = [m for m in msgs if m and m.grouped_id == msg.grouped_id]
+            album_msgs.sort(key=lambda x: x.id)
+            
+            if not album_msgs: return
+            
+            first_msg = album_msgs[0]
+            msg_ids = [m.id for m in album_msgs]
+            
+            self.pending_edits[first_msg.id] = {
+                'old_tweet_id': old_tweet_id,
+                'ids': msg_ids
+            }
 
-        if self.twitter.delete_tweet(old_tweet_id):
-            logger.info(f"Old tweet {old_tweet_id} deleted.")
+            text_preview = first_msg.raw_text[:100] + "..." if first_msg.raw_text else "Album Update"
+            buttons = [
+                [Button.inline("✅ Apply Change", data=f"approve_edit_album_{first_msg.id}"), 
+                 Button.inline("❌ Reject", data=f"cancel_edit_album_{first_msg.id}")]
+            ]
+            await self.client.send_message(
+                Config.LOG_CHANNEL_ID,
+                f"📝 **EDIT APPROVAL (ALBUM)**\n\nFiles: {len(album_msgs)}\nText: {text_preview}\n\nDo you want to sync this change?",
+                buttons=buttons
+            )
 
-        text_content = msg.raw_text
-        media_path = await self.download_media(msg)
-        media_list = [media_path] if media_path else []
-        
-        quote_id = None
-        if msg.is_reply:
-            reply = await msg.get_reply_message()
-            if reply:
-                quote_id = self.storage.get_tweet_id(reply.id)
-
-        new_tweet_id = self.twitter.post_tweet(text_content, media_list, quote_id=quote_id)
-        
-        self.cleanup_files(media_list)
-
-        if new_tweet_id:
-            self.storage.add_id(msg.id, new_tweet_id)
-            self.recent_posts[msg.id] = time.time()
-            tweet_link = f"https://x.com/i/status/{new_tweet_id}"
-            send_log(f"🔄 **EDIT SYNCED**\n\nOld ID: `{old_tweet_id}`\nNew Link: [Click Here]({tweet_link})", "SUCCESS")
+        else:
+            self.pending_edits[msg.id] = {'old_tweet_id': old_tweet_id}
+            text_preview = msg.raw_text[:100] + "..." if msg.raw_text else "Update"
+            buttons = [
+                [Button.inline("✅ Apply Change", data=f"approve_edit_single_{msg.id}"), 
+                 Button.inline("❌ Reject", data=f"cancel_edit_single_{msg.id}")]
+            ]
+            await self.client.send_message(
+                Config.LOG_CHANNEL_ID,
+                f"📝 **EDIT APPROVAL**\n\nID: `{msg.id}`\nText: {text_preview}\n\nDo you want to sync this change?",
+                buttons=buttons
+            )
 
     async def handle_album_chunk(self, message):
         gid = message.grouped_id
@@ -184,13 +224,13 @@ class TelegramListener:
 
         first_msg = messages[0]
         msg_ids = [m.id for m in messages]
-        self.pending_albums[first_msg.id] = msg_ids
+        self.pending_posts[first_msg.id] = msg_ids
         
         text_preview = first_msg.raw_text[:100] + "..." if first_msg.raw_text else "No Text"
         
         buttons = [
-            [Button.inline("✅ Share", data=f"approve_album_{first_msg.id}"), 
-             Button.inline("❌ Cancel", data=f"cancel_album_{first_msg.id}")]
+            [Button.inline("✅ Share", data=f"approve_post_album_{first_msg.id}"), 
+             Button.inline("❌ Cancel", data=f"cancel_post_album_{first_msg.id}")]
         ]
         
         await self.client.send_message(
@@ -199,8 +239,13 @@ class TelegramListener:
             buttons=buttons
         )
 
-    async def execute_album_post(self, messages, log_event):
-        logger.info(f"Processing approved album with {len(messages)} items.")
+    async def execute_album_post(self, messages, log_event, old_tweet_id=None):
+        logger.info(f"Processing album with {len(messages)} items.")
+        
+        if old_tweet_id:
+            await log_event.edit("⏳ **Deleting old tweet...**")
+            self.twitter.delete_tweet(old_tweet_id)
+
         media_files = []
         text_content = ""
         message_ids = []
@@ -229,20 +274,19 @@ class TelegramListener:
                 self.recent_posts[mid] = post_time
             
             tweet_link = f"https://x.com/i/status/{success_id}"
-            await log_event.edit(f"✅ **ALBUM POSTED**\nLink: [View]({tweet_link})", link_preview=False)
+            action_text = "EDIT SYNCED" if old_tweet_id else "ALBUM POSTED"
+            await log_event.edit(f"✅ **{action_text}**\nLink: [View]({tweet_link})", link_preview=False)
         else:
             await log_event.edit("❌ **ERROR:** Album posting failed.")
         
         self.cleanup_files(media_files)
 
-    async def process_single_request(self, message):
-        logger.info(f"New single message request: {message.id}")
-        
+    async def process_single_request(self, message, is_edit=False):
         text_preview = message.raw_text[:100] + "..." if message.raw_text else "No Text"
         
         buttons = [
-            [Button.inline("✅ Share", data=f"approve_single_{message.id}"), 
-             Button.inline("❌ Cancel", data=f"cancel_single_{message.id}")]
+            [Button.inline("✅ Share", data=f"approve_post_single_{message.id}"), 
+             Button.inline("❌ Cancel", data=f"cancel_post_single_{message.id}")]
         ]
         
         await self.client.send_message(
@@ -251,7 +295,11 @@ class TelegramListener:
             buttons=buttons
         )
 
-    async def execute_single_post(self, message, log_event):
+    async def execute_single_post(self, message, log_event, old_tweet_id=None):
+        if old_tweet_id:
+            await log_event.edit("⏳ **Deleting old tweet...**")
+            self.twitter.delete_tweet(old_tweet_id)
+
         media_path = await self.download_media(message)
         media_list = [media_path] if media_path else []
         quote_id = None
@@ -269,7 +317,8 @@ class TelegramListener:
             self.storage.add_id(message.id, success_id)
             self.recent_posts[message.id] = time.time()
             tweet_link = f"https://x.com/i/status/{success_id}"
-            await log_event.edit(f"✅ **POST SHARED**\nLink: [View]({tweet_link})", link_preview=False)
+            action_text = "EDIT SYNCED" if old_tweet_id else "POST SHARED"
+            await log_event.edit(f"✅ **{action_text}**\nLink: [View]({tweet_link})", link_preview=False)
         else:
             await log_event.edit(f"❌ **ERROR:** Failed to post. ID: {message.id}")
         
