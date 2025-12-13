@@ -26,7 +26,8 @@ class TelegramListener:
         self.album_queue = {}
         self.pending_posts = {} 
         self.pending_edits = {}
-        self.active_edit_locks = set()
+        self.edit_tasks = {} 
+        self.recent_posts = {}
         self.start_time = time.time()
         self.total_tweets = 0
 
@@ -155,28 +156,31 @@ class TelegramListener:
         msg = event.message
         if not msg: return
 
-        if msg.id in self.active_edit_locks:
-            return
+        if msg.id in self.edit_tasks:
+            self.edit_tasks[msg.id].cancel()
         
-        self.active_edit_locks.add(msg.id)
-        
+        task = asyncio.create_task(self.process_edit_worker(msg.id, msg.grouped_id))
+        self.edit_tasks[msg.id] = task
+
+    async def process_edit_worker(self, msg_id, grouped_id):
         try:
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)
+            
+            msg = await self.client.get_messages(Config.TG_CHANNEL_ID, ids=msg_id)
+            if not msg: return
 
             old_tweet_id = self.storage.get_tweet_id(msg.id)
             if not old_tweet_id:
-                logger.warning(f"Edit ignored: No Tweet ID found for Msg {msg.id}")
                 return
 
             logger.info(f"Processing edit for Msg {msg.id}")
 
-            if msg.grouped_id:
-                msgs = await self.client.get_messages(Config.TG_CHANNEL_ID, min_id=msg.id-10, max_id=msg.id+10)
-                album_msgs = [m for m in msgs if m and m.grouped_id == msg.grouped_id]
+            if grouped_id:
+                msgs = await self.client.get_messages(Config.TG_CHANNEL_ID, min_id=msg.id-9, max_id=msg.id+9)
+                album_msgs = [m for m in msgs if m and m.grouped_id == grouped_id]
                 album_msgs.sort(key=lambda x: x.id)
                 
                 if not album_msgs: 
-                    logger.warning("Album edit detected but no siblings found.")
                     return
                 
                 first_msg = album_msgs[0]
@@ -211,13 +215,13 @@ class TelegramListener:
                     buttons=buttons
                 )
         
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            logger.error(f"Error handling edit: {e}")
-        
+            logger.error(f"Error in edit worker: {e}")
         finally:
-            await asyncio.sleep(10)
-            if msg.id in self.active_edit_locks:
-                self.active_edit_locks.remove(msg.id)
+            if msg_id in self.edit_tasks:
+                del self.edit_tasks[msg_id]
 
     async def handle_album_chunk(self, message):
         gid = message.grouped_id
