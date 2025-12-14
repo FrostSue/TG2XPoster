@@ -6,13 +6,9 @@ from core.env_loader import Config
 from utils.restarter import restart_bot
 from utils.auth_manager import AuthManager
 
-
 auth = AuthManager()
 
 async def handle_command(event, bot_instance):
-    """
-    Owner & Sudo Logic
-    """
     sender = await event.get_sender()
     if not sender: return
 
@@ -22,21 +18,17 @@ async def handle_command(event, bot_instance):
     command_parts = raw_text.split()
     if not command_parts: return
     
-    
     command = command_parts[0].lower().split('@')[0]
     args = command_parts[1:] 
-    
     
     user_id = sender.id
     is_owner = auth.is_owner(user_id)
     is_sudo = auth.is_authorized(user_id) 
 
-    
-    
     if command == '/start':
         intro_msg = (
             "🤖 **TG2XPoster Active**\n"
-            "I am running privately. Access is restricted to authorized personnel only."
+            "System is running privately."
         )
         await event.reply(intro_msg)
         return
@@ -45,6 +37,8 @@ async def handle_command(event, bot_instance):
         if is_sudo:
             msg = (
                 "🛠 **ADMIN COMMANDS**\n\n"
+                "🟢 `/on` - Activate Auto-Posting\n"
+                "🔴 `/off` - Pause System (Ignore msgs)\n"
                 "📊 `/status` - System stats\n"
                 "🏓 `/ping` - Health check\n"
                 "📋 `/logs` - View logs\n"
@@ -62,16 +56,22 @@ async def handle_command(event, bot_instance):
             await event.reply("⛔ Access Denied.")
         return
 
-    
-    
-    protected_commands = ['/status', '/ping', '/logs', '/restart', '/addsudo', '/rmsudo', '/sudolist']
+    protected_commands = ['/on', '/off', '/status', '/ping', '/logs', '/restart', '/addsudo', '/rmsudo', '/sudolist']
     if command in protected_commands:
         if not is_sudo:
-            await event.reply("⛔ **Access Denied:** You are not authorized to manage this bot.")
+            await event.reply("⛔ **Access Denied:** You are not authorized.")
             return
 
-    
-    
+    if command == '/on':
+        bot_instance.is_paused = False
+        await event.reply("🟢 **System ONLINE.**\nNew messages will be posted to X automatically.")
+        return
+
+    if command == '/off':
+        bot_instance.is_paused = True
+        await event.reply("🔴 **System PAUSED.**\nNew messages will be ignored.")
+        return
+
     if command == '/ping':
         await event.reply("🏓 **Pong!** System is operational.")
 
@@ -79,12 +79,13 @@ async def handle_command(event, bot_instance):
         uptime_seconds = int(time.time() - bot_instance.start_time)
         uptime_str = str(datetime.timedelta(seconds=uptime_seconds))
         
+        state_icon = "🔴 PAUSED" if bot_instance.is_paused else "🟢 ONLINE"
         role = "👑 Owner" if is_owner else "👮 Sudo Admin"
         
         status_msg = (
             f"📊 **SYSTEM STATUS**\n\n"
-            f"🛡 **User Role:** {role}\n"
-            f"✅ **State:** Online\n"
+            f"🛡 **Role:** {role}\n"
+            f"🔋 **State:** {state_icon}\n"
             f"⏱ **Uptime:** `{uptime_str}`\n"
             f"🐦 **Tweets:** `{bot_instance.total_tweets}`"
         )
@@ -108,11 +109,9 @@ async def handle_command(event, bot_instance):
         await event.reply("🔄 **Rebooting...**")
         restart_bot()
 
-    
-    
     elif command == '/addsudo':
         if not is_owner:
-            await event.reply("⛔ Only the **Owner** can add new admins.")
+            await event.reply("⛔ Only Owner.")
             return
         
         if not args or not args[0].isdigit():
@@ -121,13 +120,13 @@ async def handle_command(event, bot_instance):
             
         new_id = int(args[0])
         if auth.add_sudo(new_id):
-            await event.reply(f"✅ User `{new_id}` added to Sudo list.")
+            await event.reply(f"✅ User `{new_id}` added.")
         else:
-            await event.reply("⚠️ User is already authorized or invalid.")
+            await event.reply("⚠️ Already authorized.")
 
     elif command == '/rmsudo':
         if not is_owner:
-            await event.reply("⛔ Only the **Owner** can remove admins.")
+            await event.reply("⛔ Only Owner.")
             return
 
         if not args or not args[0].isdigit():
@@ -136,18 +135,18 @@ async def handle_command(event, bot_instance):
 
         target_id = int(args[0])
         if auth.remove_sudo(target_id):
-            await event.reply(f"🗑 User `{target_id}` removed from Sudo list.")
+            await event.reply(f"🗑 User `{target_id}` removed.")
         else:
-            await event.reply("⚠️ User not found in Sudo list.")
+            await event.reply("⚠️ Not found.")
 
     elif command == '/sudolist':
         if not is_owner:
-            await event.reply("⛔ Only the **Owner** can view the list.")
+            await event.reply("⛔ Only Owner.")
             return
             
         sudoers = auth.get_sudo_list()
         if not sudoers:
-            await event.reply("📜 **Sudo List:** Empty (Only Owner has access).")
+            await event.reply("📜 Empty.")
         else:
-            msg = "📜 **Authorized Sudo Users:**\n" + "\n".join([f"- `{uid}`" for uid in sudoers])
+            msg = "📜 **Sudo Users:**\n" + "\n".join([f"- `{uid}`" for uid in sudoers])
             await event.reply(msg)
